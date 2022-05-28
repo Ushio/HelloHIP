@@ -137,7 +137,8 @@ namespace orox
 
             auto params = arguments.kernelParams();
             oroFunction f = m_functions[name];
-            oroModuleLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, 0, hStream, params.data(), 0);
+            oroError e = oroModuleLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ, 0, hStream, params.data(), 0);
+            PR_ASSERT(e == oroSuccess);
         }
     private:
         oroModule m_module = 0;
@@ -166,17 +167,41 @@ int main() {
     oroStream stream = 0;
     oroStreamCreate(&stream);
 
-
     oroDeviceProp props;
     oroGetDeviceProperties(&props, device);
     printf("GPU: %s\n", props.name);
 
-    orox::Shader shader(GetDataPath("kernels/something.cu").c_str(), {}, {}, orox::CompileMode::Debug);
-    orox::ShaderArgument args;
-    shader.launch( "hoge", args, 2, 2, 1, 64, 1, 1, stream );
+    orox::Shader shader(GetDataPath("kernels/something.cu").c_str(), {}, {}, orox::CompileMode::Release);
 
-    oroStreamSynchronize( stream );
+    int NBlocks = 128;
+    oroDeviceptr bufferA = 0;
+    oroDeviceptr bufferB = 0;
+    oroMalloc(&bufferA, 64 * NBlocks * sizeof(float));
+    oroMalloc(&bufferB, 4 * sizeof(float));
 
+    for (;;)
+    {
+        oroMemsetD8Async( bufferA, 0, 64 * NBlocks * sizeof(float), stream );
+        float vs[] = { 1, 2, 3, 4 };
+        oroMemcpyHtoDAsync( bufferB, vs, 4 * sizeof(float), stream );
+
+        orox::ShaderArgument args;
+        args.add(bufferA);
+        args.add(bufferB);
+        shader.launch( "hoge", args, NBlocks, 1, 1, 64, 1, 1, stream );
+
+        oroStreamSynchronize( stream );
+
+        std::vector<float> result( 64 * NBlocks);
+        oroMemcpyDtoH(result.data(), bufferA, 64 * NBlocks * sizeof(float));
+
+        for (int i = 0; i < 64 * NBlocks ; i++)
+        {
+            PR_ASSERT( result[i] == 10.0f );
+        }
+    }
+
+    
   //  Config config;
   //  config.ScreenWidth = 1920;
   //  config.ScreenHeight = 1080;
